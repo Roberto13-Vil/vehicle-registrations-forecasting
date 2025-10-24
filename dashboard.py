@@ -1,10 +1,44 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 from statsmodels.tsa.seasonal import seasonal_decompose
 from statsmodels.tsa.stattools import acf, pacf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+try:
+    import torch
+    import joblib
+    import torch.nn as nn
+    class LSTM_ts(nn.Module):
+        def __init__(self, input_size = 1, hidden_size = 64, num_layers = 2, outputs_size = 1, dropout = 0.2):
+            super().__init__()
+            self.hidden_size = hidden_size
+            self.num_layers = num_layers
+
+            self.lstm  = nn.LSTM(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout
+            )
+
+            self.fc = nn.Linear(hidden_size, outputs_size)
+        
+        def forward (self, x):
+            h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+            c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+
+            out, _ = self.lstm(x, (h0, c0))
+            out = out[:, -1, :]
+            out = self.fc(out)
+
+            return out
+    torch_available = True
+except ImportError:
+    torch_available = False
 
 # Page configurations
 st.set_page_config(
@@ -214,4 +248,48 @@ else:
         st.plotly_chart(fig, use_container_width=True)
     
     elif analysis_type == "Forecasting":
-        st.info("🔧 Forecasting feature is under development. Stay tuned for updates!")
+            df_test = {}
+            for vehicle in filtered_data['Vehicle Type'].unique():
+                path = f'Outputs/Predictions/eval_pred_{vehicle.replace(" ", "_").lower()}.parquet'
+                df_test[vehicle] = pd.read_parquet(path)
+
+                df_vehicle = df_test[vehicle]
+                rmse = np.sqrt(np.mean((df_vehicle['Pred'] - df_vehicle['Real'])**2))
+
+                df_vehicle['Upper'] = df_vehicle['Pred'] + 1.96 * rmse
+                df_vehicle['Lower'] = df_vehicle['Pred'] - 1.96 * rmse
+
+                st.markdown(f"### 📊 Forecasting Results for {vehicle}")
+
+                fig = px.line(
+                    df_vehicle,
+                    x='Date',
+                    y=['Real', 'Pred'],
+                    labels={'value': 'Registrations', 'variable': 'Legend'},
+                    title=f'Forecast vs Actual for {vehicle}'
+                )
+
+                fig.add_traces([
+                    go.Scatter(
+                        x=df_vehicle['Date'], y=df_vehicle['Upper'],
+                        mode='lines',
+                        line=dict(width=0),
+                        name='Upper Bound',
+                        showlegend=False
+                    ),
+                    go.Scatter(
+                        x=df_vehicle['Date'], y=df_vehicle['Lower'],
+                        mode='lines',
+                        fill='tonexty',
+                        line=dict(width=0),
+                        fillcolor='rgba(0,100,80,0.2)',
+                        name='Confidence Interval',
+                        showlegend=True
+                    )
+                ])
+
+                fig.update_layout(legend_title_text='Legend')
+                st.plotly_chart(fig, use_container_width=True)
+
+            
+
